@@ -1,2 +1,2 @@
 # Spider
-internship-spider
+internship-spider-projects
