@@ -1,0 +1,1423 @@
+"""
+选择演唱会--https://my.bookmyshow.com/en---得到语言，场地，时间
+Book--https://my.bookmyshow.com/en/events/6yer546j5ruh5acciomjjuawtoacieapreenma/FENGSHUI
+安全验证(睡10秒,下滑同意)--获取set-cookie       生成cartid
+几张票--https://my.bookmyshow.com/booking/FENGSHUI/quantity
+选择区域(自动分配座位)--https://my.bookmyshow.com/booking/FENGSHUI/seats  （票数+区域来判定是否有足够数量的票，进而加入到购物车）
+生成购物车(购物车中可以查看座位)--https://my.bookmyshow.com/checkout
+结账--
+填写个人信息(不同演唱会所需信息不同)勾选同意并确认信息--https://my.bookmyshow.com/checkout/patron
+支付--https://my.bookmyshow.com/checkout/payment
+"""
+import os
+import requests_go
+import time
+import json
+import re
+import secrets
+
+from fake_useragent import UserAgent
+from requests_go import tls_config
+from requests import RequestException
+from bs4 import BeautifulSoup
+from user_agents import parse
+from datetime import datetime
+from urllib.parse import unquote
+
+class BookMyShow:
+    def __init__(self, nums_of_seats:int, area_type:int,fullname:str,email:str,phone:str):
+        self.nums_of_seats = nums_of_seats
+        self.areaType = area_type
+        self.email = email
+        self.fullname = fullname
+        self.phone = phone
+
+        self.nums_of_403 = 0
+        self.authorization = ''
+        self.cartId = ''
+        self.file_path = f'./debug/{self.email}.json'
+        self.inventoryId = self.areaType
+        self.session = requests_go.Session()
+        self.ga3_init()
+        self.ua,self.sec_ch_ua,self.sec_ch_os = self.get_ua()
+        self.seat_info = ''
+        self.key = ''
+        self.client_secret = ''
+        self.transactionId = ''
+        self.total_fee = 0.0
+        self.paymentRef = ''
+        self.bookingRef = ''
+        self.payment_intent = ''
+        self.alipay_redirect = ''
+        self.alipay_exterface_invoke_assign_sign = ''
+        self.auth_order_id = ''
+        self.debug_request = []
+
+
+    def get_ua(self):
+        ua = UserAgent(browsers=["Google", "Chrome", "Firefox", "Edge", "Opera", "Safari"],
+                       platforms='desktop', os=['Windows', "Mac OS X"])
+        # 获取随机生成的 User-Agent 字符串
+        ua_str = ua.random
+        # print("User-Agent:", ua_str)
+        # 解析 User-Agent 字符串
+        user_agent = parse(ua_str)
+        # 使用正则表达式提取浏览器名称和版本
+        browser_match = re.search(r"(Chrome|Chromium|Firefox|Edge|Opera|Safari)/(\d+)", ua_str)
+        browser_name = browser_match.group(1)
+        browser_version = browser_match.group(2)
+        # 格式化成 sec-ch-ua 字符串
+        sec_ch_ua = f'"{browser_name}";v="{browser_version}", "{browser_name}";v="{browser_version}", "Not A Brand";v="99"'
+        return ua_str,sec_ch_ua,user_agent.os.family
+
+    def save_debug(self, url, headers, data, params, cookies, response):
+        # , url, headers, data, params, cookies, response
+        # url = response.request.url
+        # headers = dict(response.request.headers)
+        # data = response.request.body
+        # if isinstance(data, bytes):
+        #     data = data.decode('utf-8')# 将字节对象解码为字符串
+        # params = ''
+        # cookies = self.session.cookies.get_dict()
+        # content = response.text
+        # 获取当前时间并格式化，保留毫秒
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.') + str(datetime.now().microsecond)[:3]
+        # 检查文件夹是否存在，如果不存在则创建
+        folder = os.path.dirname(self.file_path)
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        # 创建要保存的内容，包含所有传入的请求信息
+        request_info = {
+            "startTime": current_time,
+            "request": {
+                "url": url,
+                "headers": headers,
+                "data": data,
+                "params": params,
+                "cookies": cookies,
+                "content": response
+            }
+        }
+        # 写入文本到文件
+        self.debug_request.append(request_info)
+        with open(self.file_path, 'w', encoding='utf-8') as file:
+            json.dump(self.debug_request, file, ensure_ascii=False, indent=4)
+
+    def send_req(self, method, url, params=None, cookies=None, headers=None, data=None,allow_redirects=False,json = None,keep_session = True):
+        method = method.lower()
+        response = ''
+        for i in range(3):
+            # p = self.proxies.copy()
+            try:
+                if keep_session:
+                        if method == 'post':
+                            response = self.session.post(
+                                url,
+                                params=params,
+                                cookies=cookies,
+                                headers=headers,
+                                data=data,
+                                verify=False,
+                                # proxies=p,
+                                allow_redirects=allow_redirects,
+                                json=json,
+                            )
+                        if method == 'get':
+                            response = self.session.get(
+                                url,
+                                params=params,
+                                cookies=cookies,
+                                headers=headers,
+                                json=json,
+                                # proxies=p,
+                                allow_redirects=allow_redirects,
+                                verify=False,
+                            )
+                else:
+                    if method =='post':
+                        response = self.session.post(
+                                url,
+                                params=params,
+                                cookies=cookies,
+                                headers=headers,
+                                data=data,
+                                verify=False,
+                                # proxies=p,
+                                allow_redirects=allow_redirects,
+                                json=json,
+                            )
+                    if method == 'get':
+                        response = self.session.get(
+                                url,
+                                params=params,
+                                cookies=cookies,
+                                headers=headers,
+                                json=json,
+                                # proxies=p,
+                                allow_redirects=allow_redirects,
+                                verify=False,
+                            )
+                #cookie不一样的原因是，如果cookie存在于session中，则不会更新，所以需要手动更新
+                # self.save_debug(url, response.request.headers, data, params, self.session.cookies.get_dict(), response.text)
+                if response.status_code == 403:
+                    # self.logger.error(f'code:{response.status_code},text:{response.text}')
+                    # pro= proxies.get_proxys(self.email)
+                    # if pro is None:
+                    #     self.logger.error(f"{url}:报403,尝试更改代理IP,但代理池为空或者拿取代理次数超过限制")
+                    #     print(f"{url}:报403,尝试更改代理IP,但代理池为空或者拿取代理次数超过限制")
+                    #     raise AccessDeniedError('被禁止访问')
+                    # self.proxies= pro
+                    # self.logger.error(f"{url}:报403,尝试更改代理IP,更换新代理为:{self.proxies}")
+                    # print(f"{url}:报403,尝试更改代理IP")
+                    # time.sleep(0.2)
+                    # self.logger.error(f"{url}:报403,尝试sleep 60秒")
+                    print(f"{url}:报403,尝试sleep 60秒")
+                    self.nums_of_403 += 1
+                    if self.nums_of_403 >= 10:
+                        self.stop = True
+                        # self.logger.info(f'403过多，程序终止')
+                    time.sleep(60)
+                    continue
+                return response
+            except RequestException as e:
+                if method == 'post':
+                    # self.logger.info(f'报错：url:{url},data:{data}')
+                    print(f'报错：url:{url},data:{data}')
+                else:
+                    # self.logger.error(f'报错：url:{url},params:{params}')
+                    print(f'报错：url:{url},params:{params}')
+                # self.logger.error(f"发送请求失败 {e}")
+                print(f"发送请求失败: {e}")
+                continue
+
+        return response
+
+    #TODO : 直接拿的是谷歌的ja3，但是ua里面什么浏览器都有，后期如果有玄学问题就需要考虑这个情况
+    def ga3_init(self):
+      tc = {
+        "donate": "Please consider donating to keep this API running. Visit https://tls.peet.ws",
+        "ip": "175.9.32.109:59576",
+        "http_version": "h2",
+        "method": "GET",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "tls": {
+          "ciphers": [
+            "TLS_GREASE (0x8A8A)",
+            "TLS_AES_128_GCM_SHA256",
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_RSA_WITH_AES_128_CBC_SHA",
+            "TLS_RSA_WITH_AES_256_CBC_SHA"
+          ],
+          "extensions": [
+            {
+              "name": "TLS_GREASE (0x6a6a)"
+            },
+            {
+              "name": "application_settings (17613)",
+              "protocols": [
+                "h2"
+              ]
+            },
+            {
+              "name": "session_ticket (35)",
+              "data": ""
+            },
+            {
+              "name": "application_layer_protocol_negotiation (16)",
+              "protocols": [
+                "h2",
+                "http/1.1"
+              ]
+            },
+            {
+              "name": "supported_groups (10)",
+              "supported_groups": [
+                "TLS_GREASE (0xdada)",
+                "X25519MLKEM768 (4588)",
+                "X25519 (29)",
+                "P-256 (23)",
+                "P-384 (24)"
+              ]
+            },
+            {
+              "name": "compress_certificate (27)",
+              "algorithms": [
+                "brotli (2)"
+              ]
+            },
+            {
+              "name": "signature_algorithms (13)",
+              "signature_algorithms": [
+                "ecdsa_secp256r1_sha256",
+                "rsa_pss_rsae_sha256",
+                "rsa_pkcs1_sha256",
+                "ecdsa_secp384r1_sha384",
+                "rsa_pss_rsae_sha384",
+                "rsa_pkcs1_sha384",
+                "rsa_pss_rsae_sha512",
+                "rsa_pkcs1_sha512"
+              ]
+            },
+            {
+              "name": "extensionRenegotiationInfo (boringssl) (65281)",
+              "data": "00"
+            },
+            {
+              "name": "ec_point_formats (11)",
+              "elliptic_curves_point_formats": [
+                "0x00"
+              ]
+            },
+            {
+              "name": "psk_key_exchange_modes (45)",
+              "PSK_Key_Exchange_Mode": "PSK with (EC)DHE key establishment (psk_dhe_ke) (1)"
+            },
+            {
+              "name": "signed_certificate_timestamp (18)"
+            },
+            {
+              "name": "extended_master_secret (23)",
+              "master_secret_data": "",
+              "extended_master_secret_data": ""
+            },
+            {
+              "name": "key_share (51)",
+              "shared_keys": [
+                {
+                  "TLS_GREASE (0xdada)": "00"
+                },
+                {
+                  "X25519MLKEM768 (4588)": "bd7c7787632da4350d41d84883f80d9c0485ddb7359341cc74fb78e1f5bcfbb3c500683a6c2c34a1508a3a78c6d82941b90a87735227987358adaa719c96892278793d4035c65a188ff5042b7457dd1c9d16d3a29f78a05fcabfb758a0f9a20a98e12e292ababae57f939c9e61041f536ca391b150b172602c1253c6b0007cf72a07dca509f3bee3c201f312affb279e758821e7d6a3361200e04678494b608a36885f57219853aa6e7c266f25650c638a83a4c919fc53404b27d060907d9c0fb4aa4bf34504a007a184e4938a26b9344359463ba11e1bc5bbb0273deaab541373401860b2566402355b9ec06cfee20ff4976a7e126c4b5c3cb8b4003aeaaaec74a346586d7c6b50663c4a8d129002746250f3b64f24c6db91c3b3642641cb5038866b8f7cc726f7169f33409e942163880a5d5c4b9a03bfb906377bb0ce15c231a45103d3b86df19c560b19c85f1117b2c51e2b198764e0bd4b364b0e758f98e612f5b8c505f13bba589f16d22344613c780b1121715008618bb11643bf2a05f7674e89c27f83410ff91729ec56a304066fd2fba5b5a462b5189ce9cb9a85688d33870e9fb588180a473cca888e0a1182197f80300e3c7c252e8c31c978778a259b66cc8b7f98957a7920d7063821185eda45cddd4bc3ca96642f956127bace529a168c1937c76a920e2422c89b787e00454e5c16649131fa6404fa96056960a8f51118b2c19d561b1da9fa7727fb9999b224259a9d83d5baa78caa0263b088185a91c2831570322a23298fe09fa0d9c3ba05cf2ff2b67624b3fe40ac31e0b989232158992282e20d517c4b9910289ed2a8fd3059f049981c9caeb6f37178e98836b16446a14e6989c22a00b5724c2b89883e8aba5b8a096c0f5c76064a71d19c820e084ba8627c6f71082dea9fb1a6c0161a26c61b1c714301062601fb0770213c06e872b1aed251e83866ae3b5b81bc2afe707eec64ce8fc4c7a69a83113837ef3a882ff434c01714f348b19415bc1574c31629832dc27a296b112ae17b3e3b530e53adaf3cc991292e3d8aacb51b8703c7b8d4ba5aa007b6afc94cb88cc98c0a5cb3521130492f4562bd30e97e39ea868e572cbde334c6b08a286035538b516bd4185a34a9ea764cda692f89793e330329cc313fdf8a9303204f4654a31a6ba6edcc60f9151dd19b37797b7bfc6531171c3d4b53b42740cd7842ba9352a4d880929040277db8223e6289f2c580db2794e47270bb58ba1813393c11c154a766be555a22fc1bc7081dfe24af77e33ecea6a79aa6896dd95dccc5637c76bdc4240bc20aa54f7c556cea6791c0b51b2147ddb3a2b231ce788467e8f3a445c1b192c797f5982ab436352ecb4980c535835678239a6d337a1f6e6c9fe2c7009ea53b27c88ecea0cbb6b7850d0b455c15a64ad6c618b94224ac595b4c65ddb211a4a6ae3293a911b00c945aa2c8e73f7b9366c49ac876894a1d57ab28374932dc8472b82757c77c5448977fa8667284c81463af1faa528f027aba4241251a46ca7900875c3de85206218619c7477054143bace46b58d34b2637c5efa9b6b0112ea3a234030bcb033216332a367ae405166c923345a18b637ba3f5cab6211c085995c967e6fd300a6627aa24fd4f8e678fd03a550fe15ebc8b0a64182967bf04746737285b760eb8c9fe6ff8d26ee0d799f6448db3703d8459284e48be5b738b6967"
+                },
+                {
+                  "X25519 (29)": "f9ea3cb0c7e53da41f5c1586dc5983514c2c49cdd19ef1fce2eae396e549b361"
+                }
+              ]
+            },
+            {
+              "name": "extensionEncryptedClientHello (boringssl) (65037)",
+              "data": "0000010001a1002087e05c20e38193d517ae25e3374bad9f3cca07df34a66940b97a2b0b4d5b3b2900b08938d593f05c0c1c812c740d4d9777115ee286620a5974a2a03c53200d1cbfe412e0cc641776bd6549c2074a41b7b6491c03d0e1210ff385a03a22ebf82460e8f9fd0166f44019569784322489db0acb9e7d62ff02423bea2244a9245754975a2375b488504a67687c18b9d14123d74a236743b3b89792548c0346a93940fb78af20a724e08aa5df0980a7054b2f3059614eecf83751ef9d281807788f6ad12248afdb1766bb456c0d61c63d8e7e6ac2"
+            },
+            {
+              "name": "status_request (5)",
+              "status_request": {
+                "certificate_status_type": "OSCP (1)",
+                "responder_id_list_length": 0,
+                "request_extensions_length": 0
+              }
+            },
+            {
+              "name": "server_name (0)",
+              "server_name": "tls.peet.ws"
+            },
+            {
+              "name": "supported_versions (43)",
+              "versions": [
+                "TLS_GREASE (0xbaba)",
+                "TLS 1.3",
+                "TLS 1.2"
+              ]
+            },
+            {
+              "name": "TLS_GREASE (0x7a7a)"
+            },
+            {
+              "name": "pre_shared_key (41)",
+              "data": "00770071e08464d168280478a879d55a5927281fce939dced4930e67577dc3ea0e5e48a3307fb4d554dc6237022f58ff91a6413a95a2c73ab69fbda9c9e7c5e675148bed20fd9253ed9da059581b519020f494e31714ca7e73d172986cbc097b1aa9dc75d2c93ac0f78a0964bc43558fd5e90dfcaaec8273b4002120e08f303ac450cfa063738c622b7c5c54e96ee59c7f0e343c76e7407a059c5d69"
+            }
+          ],
+          "tls_version_record": "771",
+          "tls_version_negotiated": "772",
+          "ja3": "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,17613-35-16-10-27-13-65281-11-45-18-23-51-65037-5-0-43-41,4588-29-23-24,0",
+          "ja3_hash": "07e9374d71b4fbc95e03d645533707f2",
+          "ja4": "t13d1517h2_8daaf6152771_38c0db7568a3",
+          "ja4_r": "t13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0015,0017,001b,0023,0029,002b,002d,0033,44cd,fe0d,ff01_0403,0804,0401,0503,0805,0501,0806,0601",
+          "peetprint": "GREASE-772-771|2-1.1|GREASE-4588-29-23-24|1027-2052-1025-1283-2053-1281-2054-1537|1|2|GREASE-4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53|0-10-11-13-16-17613-18-23-27-35-41-43-45-5-51-65037-65281-GREASE-GREASE",
+          "peetprint_hash": "d44d68f0fce54cd423d6792272a242b8",
+          "client_random": "b2d5659d9c597462b003490f086e75d0baa18a9b5e9dd896e0580c8944635aa9",
+          "session_id": "efd711b3a19ed058ad033d528744175e712cab0b2f936a3c3884a2b3b1bf3a6a"
+        },
+        "http2": {
+          "akamai_fingerprint": "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p",
+          "akamai_fingerprint_hash": "52d84b11737d980aef856699f885ca86",
+          "sent_frames": [
+            {
+              "frame_type": "SETTINGS",
+              "length": 24,
+              "settings": [
+                "HEADER_TABLE_SIZE = 65536",
+                "ENABLE_PUSH = 0",
+                "INITIAL_WINDOW_SIZE = 6291456",
+                "MAX_HEADER_LIST_SIZE = 262144"
+              ]
+            },
+            {
+              "frame_type": "WINDOW_UPDATE",
+              "length": 4,
+              "increment": 15663105
+            },
+            {
+              "frame_type": "HEADERS",
+              "stream_id": 1,
+              "length": 485,
+              "headers": [
+                ":method: GET",
+                ":authority: tls.peet.ws",
+                ":scheme: https",
+                ":path: /api/all",
+                "sec-ch-ua: \\\"Chromium\\\";v=\\\"134\\\", \\\"Not:A-Brand\\\";v=\\\"24\\\", \\\"Google Chrome\\\";v=\\\"134\\",
+                "sec-ch-ua-mobile: ?0",
+                "sec-ch-ua-platform: \\\"macOS\\",
+                "upgrade-insecure-requests: 1",
+                "user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+                "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "sec-fetch-site: none",
+                "sec-fetch-mode: navigate",
+                "sec-fetch-user: ?1",
+                "sec-fetch-dest: document",
+                "accept-encoding: gzip, deflate, br, zstd",
+                "accept-language: zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7,ko;q=0.6",
+                "priority: u=0, i"
+              ],
+              "flags": [
+                "EndStream (0x1)",
+                "EndHeaders (0x4)",
+                "Priority (0x20)"
+              ],
+              "priority": {
+                "weight": 256,
+                "depends_on": 0,
+                "exclusive": 1
+              }
+            }
+          ]
+        },
+        "tcpip": {
+          "ip": {},
+          "tcp": {}
+        }
+      }
+      self.session.tls_config = tls_config.to_tls_config(tc)
+      self.session.tls_config.random_ja3 = True
+
+    def save_debug(self, url, headers, data, params, cookies, response):
+      # , url, headers, data, params, cookies, response
+      # url = response.request.url
+      # headers = dict(response.request.headers)
+      # data = response.request.body
+      # if isinstance(data, bytes):
+      #     data = data.decode('utf-8')# 将字节对象解码为字符串
+      # params = ''
+      # cookies = self.session.cookies.get_dict()
+      # content = response.text
+      # 获取当前时间并格式化，保留毫秒
+      current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.') + str(datetime.now().microsecond)[:3]
+      # 检查文件夹是否存在，如果不存在则创建
+      folder = os.path.dirname(self.file_path)
+      if not os.path.exists(folder):
+        os.makedirs(folder)
+      # 创建要保存的内容，包含所有传入的请求信息
+      request_info = {
+        "startTime": current_time,
+        "request": {
+          "url": url,
+          "headers": headers,
+          "data": data,
+          "params": params,
+          "cookies": cookies,
+          "content": response
+        }
+      }
+      # 写入文本到文件
+      self.debug_request.append(request_info)
+      with open(self.file_path, 'w', encoding='utf-8') as file:
+        json.dump(self.debug_request, file, ensure_ascii=False, indent=4)
+
+    def get_data_json(self):
+        """
+        language 在静态文件data.json中
+        :return:str {"data":[...]}
+        """
+        url = "https://cdn-sea.bookmyshow.com/pub/data/languages/_api/data.json"
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'tz-mins-offset': "480",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'origin': "https://my.bookmyshow.com",
+            'sec-fetch-site': "same-site",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://my.bookmyshow.com/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'if-none-match': "W/\"b96b86f16d2998009bae07064367646f\"",
+            'if-modified-since': "Tue, 04 Mar 2025 03:16:23 GMT",
+            'priority': "u=1, i"
+        }
+
+        response = requests_go.get(url, headers=headers)
+
+        print(response.text)
+        data = response.content.decode()
+
+        with open('data.json','wb') as f:
+            f.write(data)
+
+        # dd = data.decode()
+        return data
+
+    def get_language(self,data):
+        pass
+
+    def get_cartId(self,json_data):
+        """
+         从响应体中
+        :param json_data:str类型的json文件
+        :return:str类型的cartId
+        """
+        # 解析 JSON 数据
+        # data = json.loads(json_data)
+
+        # 提取 set-cookie 字段的值
+        set_cookie = json_data.get("set-cookie", "")
+
+        # 分割并找到目标值
+        bms_cart_id = None
+        if "BMS_PORTAL_CART_ID_KEY=" in set_cookie:
+            # 按分号分割，取第一个键值对
+            cookie_part = set_cookie.split(";")[0]
+            # 按等号分割，取值
+            bms_cart_id = cookie_part.split("=", 1)[1]
+
+        return bms_cart_id
+
+    def get_venue(self):
+       pass
+
+    def get_date(self):
+        pass
+
+    def get_concert_info(self):
+        print("演唱会信息:")
+        # 获取data.json文件
+        data = self.get_data_json()
+        # 从data.json文件中获取该演唱会的语言
+        # self.get_language(data)
+        # # 获取场地
+        self.get_venue()
+        # # 获取时间
+        self.get_date()
+
+    def get_token(self):
+        """
+        破解5s盾
+        :return: token参数（用于获取set-cookie）
+        """
+        api_key = "CAP-C43E0CDFE7737275B407C56DBF9A0E1C08157E5ACA690E5951DA8A32C4570062"  # your api key of capsolver
+        site_key = "0x4AAAAAAAWIUs4oKuwbFOD0"  # site key of your target site
+        site_url = "https://my.bookmyshow.com/booking/FENGSHUI"  # page url of your target site
+
+        def capsolver():
+            payload = {
+                "clientKey": api_key,
+                "task": {
+                    "type": 'AntiTurnstileTaskProxyLess',
+                    "websiteKey": site_key,
+                    "websiteURL": site_url,
+                    "metadata": {
+                        "action": ""  # optional
+                    }
+                }
+            }
+            res = self.session.post("https://api.capsolver.com/createTask", json=payload)
+            resp = res.json()
+            task_id = resp.get("taskId")
+            if not task_id:
+                print("Failed to create task:", res.text)
+                return
+            # print(f"Got taskId: {task_id} / Getting result...")
+
+            while True:
+                time.sleep(1)  # delay
+                payload = {"clientKey": api_key, "taskId": task_id}
+                res = self.session.post("https://api.capsolver.com/getTaskResult", json=payload)
+                resp = res.json()
+                status = resp.get("status")
+                if status == "ready":
+                    return resp.get("solution", {}).get('token')
+                if status == "failed" or resp.get("errorId"):
+                    print("Solve failed! response:", res.text)
+                    return
+
+        token = capsolver()
+        return token
+
+    # def get_cookies_from_response(self,res):
+    #     """从响应头中提取所有 Cookie，返回字典格式"""
+    #     cookies = {}
+    #     headers = res.getheaders()
+    #     for header in headers:
+    #         if header[0].lower() == 'set-cookie':
+    #             # 解析 Set-Cookie 头（例如：'session_id=abc123; Path=/; HttpOnly'）
+    #             cookie_parts = header[1].split(';')
+    #             # 提取第一个键值对（name=value）
+    #             name_value = cookie_parts[0].strip()
+    #             if '=' in name_value:
+    #                 name, value = name_value.split('=', 1)
+    #                 cookies[name] = value
+    #     return cookies
+
+    def get_set_cookie(self):
+        """
+        发送请求并解析
+        :return:
+        """
+        # 发送请求获取响应头
+        payload = {
+            "feat": "cart",
+            "cart": True,
+            "fresh": True
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json, text/plain, */*",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        res = self.send_req('post', "https://ime.bigtix.io/customer/api/verify/bot", data=json.dumps(payload),
+                            headers=headers)
+        return res.headers
+
+
+    def generate_traceparent(self) -> str:
+        """
+        随机生成traceparent
+        :return: traceparent:str
+        """
+        version = "00"  # W3C Trace Context 版本号（固定为 00）
+        trace_id = secrets.token_hex(16)
+        parent_id = secrets.token_hex(8)
+        flags = "01"  # 采样标志（01 表示启用采样）
+        return f"{version}-{trace_id}-{parent_id}-{flags}"
+
+    def get_guest_token(self, html_response):
+        """
+        # 从html中提取出guest_token
+        :param html_response:
+        :return: guest_token
+        """
+        # 解析 HTML
+        soup = BeautifulSoup(html_response, "html.parser")
+        script_tag = soup.find("script", {"id": "__NEXT_DATA__"})
+        if script_tag:
+            try:
+                # 提取并解析 JSON
+                json_data = json.loads(script_tag.string)
+                # 导航到 guestAccessToken（假设路径为 props -> pageProps -> guestAccessToken）
+                guest_token = json_data["props"]["pageProps"].get("guestAccessToken")
+                if guest_token:
+                    print(f"提取guest_token成功")
+                else:
+                    print("guestAccessToken 字段不存在")
+            except json.JSONDecodeError:
+                print("JSON 解析失败，请检查数据完整性")
+            except KeyError as e:
+                print(f"路径错误: {e}")
+        else:
+            print("未找到 __NEXT_DATA__ 标签")
+        return guest_token
+
+    def get_authorization(self):
+        """
+        获取相应体，再从响应体中提取出值
+        :return:
+        """
+        #
+        url = "https://ime.bigtix.io/customer/en/verification/booking"
+
+        params = {
+            'from_page': "booking",
+            'iframe': "true",
+            'rd': "/booking/YESUNG25"
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'upgrade-insecure-requests': "1",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "navigate",
+            'sec-fetch-dest': "iframe",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=0, i",
+        }
+
+        response = self.send_req('get',url,params=params,headers=headers,allow_redirects=True)
+
+        html_response = response.text
+
+        return self.get_guest_token(html_response)
+
+    def PS1_confirm(self):
+        """
+        PS1选区发送该请求
+        :return: json中 st 和 ct（可能是防篡改签名或令牌，用于验证请求合法性）id（UUID格式，唯一标识该订单或会话）
+        """
+        payload = [
+            {
+                "type": "product",
+                "cartId": f"{self.cartId}",
+                "deliveryMethod": "ETICKET",
+                "product": {
+                    "code": "YESUNG25"
+                },
+                "session": {
+                    "code": "YD2Y"
+                },
+                "ticketType": {
+                    "code": "20"
+                },
+                "category": "02",
+                "qty": self.nums_of_seats
+            }
+        ]
+
+        # 发送加入到购物车请求
+        url = "https://ime.bigtix.io/api/v2/cartItems/addToCart"
+
+        params = {
+            'product': "YESUNG25"
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        response = self.send_req('post', url, data=json.dumps(payload), headers=headers, params=params)
+
+        # PS1
+        print('座位：')
+        print(response.text)
+        '''
+            {"patronDetails":{"email":""},
+            "status":0,
+            "st":"PzSIMNrNoKEYPVAnm7Y61ToSb6khmElb",        动态参数
+            "addingToCart":false,
+            "channel":"IME",
+            "createdTime":1742888036644,
+            "ct":"x3Qe8tKBWwCt4zG8jMxK4Q2VsqzpZax6",        动态参数
+            "paymentDetails":[],"promo":[],"promoErrorMessage":[],"sendEmailTaxInvoice":true,"skipPurchaseLimit":false,"splitPayment":false,"tags":[],"totalTaxDetails":[],"updatedTime":1742888037286,"currentTime":1742888054239,"id":"104ae098-ffd2-4c78-b933-d7dd337221bb"}
+        '''
+
+    def get_seat_info(self,data):
+        """
+        从VIP_confirm的response_text中提取出data对应值
+        :param data:json类型
+        :return: seat-VIP-B9-17
+        """
+        # print(type(data))
+        parsed_data = json.loads(data)  # 解析为字典
+        inner_data = parsed_data["data"]  # 获取内部列表
+        target = inner_data[0][0]  # 提取目标字符串 "seat-VIP-B9-17"
+        return target
+
+    def VIP_confirm(self):
+        url = "https://ime.bigtix.io/api/v2/inventories/ba"
+        params = {
+            'product': "YESUNG25"
+        }
+
+        payload = [
+            {
+                "inventoryId": "d2d98b07-b271-4f58-ab97-c3b86f9beda6",
+                "qty": self.nums_of_seats,
+                "cartId": f"{self.cartId}"
+            }
+        ]
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        response = self.send_req('post',url,params=params, data=json.dumps(payload), headers=headers)
+
+        # print(response.text)
+        self.seat_info = self.get_seat_info(response.text)
+
+    def choose_num_of_seats(self):
+        """
+        需要InventoryId, qty, cartId
+        选择好票数和区域
+        :return:座位号列表
+        """
+
+        # 获取authorizaion
+        self.authorization = self.get_authorization()
+
+        data = self.get_set_cookie()
+
+        # 从set-cookie中获取cartId
+        self.cartId = self.get_cartId(data)
+        # print(f"cartid:{self.cartId}")
+
+        # 获取inventoryId
+        # self.get_inventoryId()
+
+        # inventoryid == 0:VIP_confirm选区
+        if self.inventoryId == 0:
+            self.VIP_confirm()
+        else:
+            # inventoryid not= 0:PS1选区
+            self.PS1_confirm()
+
+    def input_info(self):
+        url = f"https://ime.bigtix.io/api/v2/carts/{self.cartId}/patron"
+
+        payload = {
+            "patronDetails": {
+                "fullName": self.fullname,
+                "email": self.email,
+                "countryCode": "CN",
+                "phone": f"+86{self.phone}"
+            }
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        # response = requests.put(url, data=json.dumps(payload), headers=headers)
+        response = self.session.put(url,data=json.dumps(payload), headers=headers)
+
+        # print('输入信息：')
+        # print(response.text)
+        # 解析 JSON 数据
+        data = json.loads(response.text)
+
+        # 提取目标字段
+        target = data["data"]["totalPayable"]
+        self.total_fee = target
+        '''
+        {"success":true,
+        "data":{"id":"8b658950-1234-47fd-b656-33df9765d183","
+                updatedTime":1742955878220,
+                "tags":[],
+                "patronDetails":{"phone":"+8612312312312",
+                "countryCode":"CN",
+                "email":"1231231234@qq.com",
+                "fullName":"q"},
+                "timeToExpire":1742956053969,"status":0,"currency":"MYR","totalPrice":698,"totalDiscount":0,"totalInclusiveTax":1.12,"totalExclusiveTax":0,"totalFees":15.12,"totalPayable":713.12,"totalQty":1,"totalTaxDetails":[{"name":"MY SST","price":1.12}],"paymentDetails":[],"currentTime":1742955878225,"promo":[],"addingToCart":false,"addingToCartError":null,"addingToCartErrData":null,"skipPurchaseLimit":false,"splitPayment":false,"sendEmailTaxInvoice":true,"promoErrorMessage":[],"_id":"8b658950-1234-47fd-b656-33df9765d183"}}
+        '''
+
+    def addingToCart(self):
+       self.VIP_addingToCart() if self.inventoryId == 0 else self.ps1_addingToCart()
+
+    def VIP_addingToCart(self):
+        url = f"https://ime.bigtix.io/api/v2/carts/{self.cartId}"
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'if-none-match': "W/\"186-Ogp8wVuZTrww+2+Bs8qrNm+VIRc\"",
+            'priority': "u=1, i",
+        }
+
+        self.send_req('get',url, headers=headers)
+
+        url = "https://ime.bigtix.io/api/v2/cartItems/addToCart"
+
+        params = {
+            'product': "YESUNG25"
+        }
+
+        payload = [
+            {
+                "type": "product",
+                "cartId": self.cartId,
+                "deliveryMethod": "ETICKET",
+                "product": {
+                    "code": "YESUNG25"
+                },
+                "session": {
+                    "code": "YD2Y"
+                },
+                "ticketType": {
+                    "code": "19"
+                },
+                "category": "01",
+                "seats": [
+                    {
+                        "code": f"{self.seat_info}"
+                    }
+                ]
+            }
+        ]
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        self.send_req('post', url, params=params, data=json.dumps(payload), headers=headers)
+
+        url = "https://ime.bigtix.io/api/v2/carts/b05fc125-9288-425b-acd4-110ef49d9922"
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'if-none-match': "W/\"1a3-rDzyvzFY1+iLqIPB91Vy7dMRXb8\"",
+            'priority': "u=1, i",
+        }
+
+        self.send_req('get', url, headers=headers)
+
+    def ps1_addingToCart(self):
+        """
+        PS1 将票添加到购物车
+        :return:
+        """
+        # id 3335
+        url = f"https://ime.bigtix.io/api/v2/carts/{self.cartId}"
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'if-none-match': "W/\"186-ccS+zJROSaTLqI+CX0N9d2X00Rc\"",
+            'priority': "u=1, i",
+        }
+
+        self.send_req('get', url, headers=headers)
+
+        url = "https://ime.bigtix.io/api/v2/cartItems"
+
+        params = {
+            'cartId': f"{self.cartId}",
+            'pagination': "false"
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'cache-control': "private, no-store",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'if-none-match': "W/\"91-LPq6uPstR5WAQZvA3/rSNvnCDSc\"",
+            'priority': "u=1, i",
+        }
+
+        self.send_req('get',url, params=params, headers=headers)
+
+    def get_key(self):
+        url = "https://ime.bigtix.io/api/v2/channels/paymentMethods"
+
+        params = {
+            'currency': "MYR",
+            'pagination': "false"
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'pragma': "no-cache",
+            'cache-control': "no-cache",
+            'traceparent': self.generate_traceparent(),
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'tz-mins-offset': "480",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        response = self.send_req('get', url, params=params, headers=headers)
+
+        # 解析 JSON 字符串为字典
+        data = json.loads(response.text)
+
+        # 遍历支付方式，找到 code 为 "FPX" 的项
+        for method in data["paymentMethods"]:
+            if method.get("code") == "FPX":
+                # 提取 publicKey（两种路径均可）
+                public_key = method.get("paymentGateways", {}).get("publicInfo", {}).get("publicKey")
+                # 或：
+                # public_key = method.get("paymentGateways", {}).get("integrationsPaymentDetail", {}).get("stripeSettings", {}).get("publicKey")
+                if public_key:
+                    print('key:',end='')
+                    print(public_key)
+                    break
+        self.key = public_key
+        return
+
+    def get_transactionId(self):
+        url = "https://ime.bigtix.io/api/v2/transactions"
+
+        payload = {
+            "cartId": self.cartId,
+            "paymentMethod": "ALIPAY",
+            "paymentMethodName": "Alipay - China (Mainland)  Account Only"
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'pragma': "no-cache",
+            'cache-control': "private, no-store",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        response = self.send_req('post', url, data=json.dumps(payload), headers=headers)
+
+        # 解析 JSON 数据
+        data = json.loads(response.text)
+
+        # 获取bookingRef
+        # 提取目标字段
+        self.bookingRef = data["data"]["transactionRef"]
+        # print(target)  # 输出：MXQXV002XDJV
+
+        # 提取目标字段（两种路径均可）
+        # 获取transactionId
+        transactionId = data["data"]["id"]  # 方式 1
+        # 或
+        # target = data["data"]["_id"]       # 方式 2
+
+        return transactionId
+
+    def get_client_secret(self):
+        """
+        先获得参数transactionId，再使用该参数获取client——secret
+        :return: client-secret
+        """
+        self.transactionId = self.get_transactionId()
+
+        # 使用transactionId发送请求
+        url = "https://ime.bigtix.io/api/v2/payments"
+
+        payload = {
+            "transactionId": self.transactionId,
+            "paymentDetails": [
+                {
+                    "paymentMethod": "ALIPAY",
+                    "amount": self.total_fee,
+                    "metadata": {}
+                }
+            ]
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Content-Type': "application/json",
+            'pragma': "no-cache",
+            'cache-control': "private, no-store",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'authorization': f"Bearer {self.authorization}",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'traceparent': self.generate_traceparent(),
+            'tz-mins-offset': "480",
+            'content-type': "application/json;charset=UTF-8",
+            'origin': "https://ime.bigtix.io",
+            'sec-fetch-site': "same-origin",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i",
+        }
+
+        response = self.send_req('post', url, data=json.dumps(payload), headers=headers)
+
+        # print(response.text)
+        # 解析 JSON 数据
+        data = json.loads(response.text)
+
+        # 提取目标字段
+        target = data["data"]["paymentDetails"][0]["paymentRef"]
+        print('paymentRef')  # 输出：MP38VZMPQPJ1
+        print(target)  # 输出：MP38VZMPQPJ1
+        self.paymentRef = target
+        # 从响应体中获取client_secret
+        # 解析 JSON 字符串为字典
+        data = json.loads(response.text)
+
+        # 提取目标字段
+        client_secret = data["data"]["paymentDetails"][0]["paymentGatewayOrderId"]
+        # print(client_secret)  输出目标字符串
+        return client_secret
+
+    def get_payment_intent_from_client_secret(self,client_secret):
+        # 方法 1：直接分割 "_secret_"
+        self.payment_intent = client_secret.split("_secret_")[0]
+        # print(payment_intent)
+        # print(target)  # 输出：pi_3R6momJ90LiiumS210n7bKyB
+
+        # 方法 2：按 "_" 分割后重组
+        # parts = client_secret.split("_")
+        # target = "_".join(parts[:3])  # 取前三个分段
+        # print(payment_intent)
+        # print(target)  # 输出同上
+
+    def get_param_value(self, data, target_key):
+        params = data['native_data'].split('&')
+        for param in params:
+            if '=' in param:
+                key, value = param.split('=', 1)
+                if key == target_key:
+                    return value
+        return None
+
+    def get_alipay_exterface_invoke_assign_sign(self, data):
+        """
+        从相应体中得到alipay_exterface_invoke_assign_sign
+        :param data:
+        :return:
+        """
+        # url = data['url']
+        url = "https://intlmapi.alipay.com/gateway.do"
+
+        encoded_url_notify = self.get_param_value(self.alipay_redirect, 'notify_url')
+        decoded_url_notify = unquote(encoded_url_notify)
+
+        encoded_url_return = self.get_param_value(self.alipay_redirect, 'return_url')
+        decoded_url_return = unquote(encoded_url_return)
+
+        params = {
+            '_input_charset': self.get_param_value(data, '_input_charset'),
+            'currency': "MYR",
+            'notify_url': decoded_url_notify,
+            'out_trade_no': self.get_param_value(data, 'out_trade_no'),
+            'partner': self.get_param_value(data, 'partner'),
+            'product_code': "NEW_OVERSEAS_SELLER",
+            'return_url': decoded_url_return,
+            'secondary_merchant_id': self.get_param_value(data, 'secondary_merchant_id'),
+            'secondary_merchant_industry': self.get_param_value(data, 'secondary_merchant_industry'),
+            'secondary_merchant_name': "my.bookmyshow.com",
+            'service': 'create_forex_trade',
+            'sign': self.get_param_value(data, 'sign'),
+            'sign_type': "MD5",
+            'subject': self.get_param_value(data, 'subject'),
+            'supplier': "my.bookmyshow.com",
+            'total_fee': self.total_fee
+        }
+
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            # 'Accept-Encoding': "gzip, deflate, br, zstd",
+            'upgrade-insecure-requests': "1",
+            'sec-fetch-site': "cross-site",
+            'sec-fetch-mode': "navigate",
+            'sec-fetch-user': "?1",
+            'sec-fetch-dest': "document",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'referer': "https://ime.bigtix.io/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=0, i"
+        }
+
+        response = self.send_req('get', url, params=params, headers=headers,allow_redirects=False)
+        # response = self.send_req('get', url, headers=headers, allow_redirects=True)
+        # print(response.status_code)
+        #
+        # print(response.text)
+
+
+    def get_alipay_redirect(self):
+        # 发送响应体中有大量参数的请求来获取参数
+        url = f"https://api.stripe.com/v1/payment_intents/{self.payment_intent}/confirm"
+        payload = {
+            'return_url': f"https://ime.bigtix.io/checkout/payment/redirect?bookingRef={self.bookingRef}&cartId={self.cartId}&paymentRef={self.paymentRef}",
+            'expected_payment_method_type': "alipay",
+            'key': self.key,
+            'client_secret': self.client_secret
+        }
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "application/json",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'pragma': "no-cache",
+            'cache-control': "no-cache",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'origin': "https://js.stripe.com",
+            'sec-fetch-site': "same-site",
+            'sec-fetch-mode': "cors",
+            'sec-fetch-dest': "empty",
+            'referer': "https://js.stripe.com/",
+            'accept-language': "zh-CN,zh;q=0.9",
+            'priority': "u=1, i"
+        }
+        # todo 有时会出现 response = ‘’
+        response = self.send_req('post', url, data=payload, headers=headers)
+        # 解析 JSON 数据
+        data = response.json()
+        # 安全访问路径（推荐）
+        alipay_redirect = data.get("next_action", {}).get("alipay_handle_redirect")
+        self.alipay_redirect = alipay_redirect
+        return
+
+    def get_auth_order_id(self):
+        """
+         先获取alipay_exterface_invoke_assign_sign，再发送20个参数
+        :return:
+        """
+        self.get_alipay_exterface_invoke_assign_sign(self.alipay_redirect)
+
+        # 2发送20个参数的请求
+        url = "https://unitradeprod.alipay.com/exterfaceAssign.htm"
+        encoded_url_notify = self.get_param_value(self.alipay_redirect, 'notify_url')
+        decoded_url_notify = unquote(encoded_url_notify)
+
+        encoded_url_return = self.get_param_value(self.alipay_redirect, 'return_url')
+        decoded_url_return = unquote(encoded_url_return)
+        params = {
+            'secondary_merchant_industry': self.get_param_value(self.alipay_redirect, 'secondary_merchant_industry'),
+            '_input_charset': self.get_param_value(self.alipay_redirect, '_input_charset'),
+            'subject': self.get_param_value(self.alipay_redirect, 'subject'),
+            'sign': self.get_param_value(self.alipay_redirect, 'sign'),
+            'notify_url': decoded_url_notify,
+            'product_code': self.get_param_value(self.alipay_redirect, 'product_code'),
+            'alipay_exterface_invoke_assign_model': "trade",
+            'alipay_exterface_invoke_assign_target': "forexWelcome.vm",
+            'secondary_merchant_id': self.get_param_value(self.alipay_redirect, 'secondary_merchant_id'),
+            'out_trade_no': self.get_param_value(self.alipay_redirect, 'out_trade_no'),
+            'partner': self.get_param_value(self.alipay_redirect, 'partner'),
+            'alipay_exterface_invoke_assign_sign': self.alipay_exterface_invoke_assign_sign,
+            'service': self.get_param_value(self.alipay_redirect, 'service'),
+            'supplier': "my.bookmyshow.com",
+            'total_fee': self.get_param_value(self.alipay_redirect, 'total_fee'),
+            'secondary_merchant_name': "my.bookmyshow.com",
+            'return_url': decoded_url_return,
+            'currency': "MYR",
+            'sign_type': "MD5",
+            'alipay_exterface_invoke_assign_client_ip': "154.92.130.52"
+        }
+        headers = {
+            'User-Agent': self.ua,
+            'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            'Accept-Encoding': "gzip, deflate, br, zstd",
+            'Pragma': "no-cache",
+            'Cache-Control': "no-cache",
+            'Upgrade-Insecure-Requests': "1",
+            'Sec-Fetch-Site': "cross-site",
+            'Sec-Fetch-Mode': "navigate",
+            'Sec-Fetch-User': "?1",
+            'Sec-Fetch-Dest': "document",
+            'sec-ch-ua': self.sec_ch_ua,
+            'sec-ch-ua-mobile': "?0",
+            'sec-ch-ua-platform': self.sec_ch_os,
+            'Referer': "https://ime.bigtix.io/",
+            'Accept-Language': "zh-CN,zh;q=0.9",
+        }
+        # todo 状态码 302,400
+        response = self.send_req('get', url, params=params, headers=headers)
+        print(response.text)
+
+    def get_web(self):
+        """
+        获取二维码网页
+        需要参数：auth_order_id                   3
+        auth_order_id来自20个参数的请求            2
+        20个参数在需要key，client—secret的响应体中  1
+        :return:
+        """
+        
+        self.get_alipay_redirect()
+        self.get_auth_order_id()
+
+
+    def pay(self):
+        self.get_key()
+        self.client_secret = self.get_client_secret()
+        self.get_payment_intent_from_client_secret(self.client_secret)
+        self.get_web()
+
+    def main(self):
+        # 获取指定演唱会信息
+        # self.get_concert_info()
+        # Book Now
+        self.choose_num_of_seats()
+        # 将票加入到购物车
+        self.addingToCart()
+        # 填写个人信息
+        self.input_info()
+        # # 支付
+        self.pay()
+
+
+
+
+if __name__ == "__main__":
+    bookMyShow = BookMyShow(nums_of_seats=1,area_type=0,fullname='q',email='1231231234@qq.com',phone='12312312312')
+    bookMyShow.main()
